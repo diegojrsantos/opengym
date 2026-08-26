@@ -22,17 +22,17 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.2",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@capacitor/android": "^7.6.8",
     "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^7.6.8",
     "@capacitor/ios": "^7.6.8",
-    "@vitejs/plugin-react": "^6.0.3",
-    "happy-dom": "^20.11.2",
+    "@vitejs/plugin-react": "^6.1.0",
+    "happy-dom": "^20.11.6",
     "linkedom": "^0.18.13",
-    "vite": "^8.1.5",
-    "vitest": "^4.1.10"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }
