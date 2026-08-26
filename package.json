@@ -1,0 +1,11 @@
+{
+  "name": "opengym",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "scripts": {
+    "build": "npm --prefix api install && npm --prefix frontend ci && npm --prefix frontend run build && rm -rf dist && cp -r frontend/dist dist",
+    "start": "node api/server.js"
+  }
+}

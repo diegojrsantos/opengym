@@ -1,0 +1,102 @@
+# Dependency updates, deliberately quiet.
+#
+# openGym is dependency-light on purpose: the frontend is React + Router + Zustand, and api/
+# has two runtime dependencies. A default Dependabot setup would still open a PR per package
+# per week, which on a solo project means the alerts stop being read — the opposite of what
+# this is for. So: monthly, everything in an ecosystem grouped into a single PR, and a low
+# cap on open PRs. Security advisories are unaffected by any of this; GitHub raises those
+# regardless of schedule.
+#
+# Only manifests that actually exist here are listed. Deliberately NOT covered:
+#   - gradle (frontend/android) and cocoapods (frontend/ios) — Capacitor generates those shells
+#     and pins the native versions to the @capacitor/* npm packages. Bumping them independently
+#     desyncs the two and breaks the mobile build; they follow the npm update instead.
+version: 2
+
+updates:
+  # Frontend app — frontend/package.json
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      # Routine bumps arrive as one PR. Runtime and build tooling move together anyway (a Vite
+      # bump usually wants its plugin bumped), and splitting them doubles the review without
+      # splitting the risk.
+      frontend:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+      # Majors get their own PR. The first grouped run bundled a Capacitor 7 → 8 migration in
+      # with six siblings, where it read as housekeeping — and CI would have gone green on it,
+      # because the test workflow builds the web app and never touches the mobile flavour. A
+      # major that lands alone is at least obviously a decision.
+      frontend-major:
+        patterns: ['*']
+        update-types: ['major']
+    ignore:
+      # Capacitor 8 needs Node >= 22 (its own `engines` field) and the build host is on 20, and
+      # `frontend/android` + `frontend/ios` are committed, so a major also means migrating the
+      # native projects — Gradle/AGP, the Podfile. That is a deliberate piece of work, not a
+      # dependency bump. Drop this ignore once the build host is on Node 22 and you want it.
+      - dependency-name: '@capacitor/*'
+        update-types: ['version-update:semver-major']
+
+  # Backend — api/package.json (@simplewebauthn/server, web-push)
+  - package-ecosystem: npm
+    directory: /api
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      api:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+      # Two dependencies, but one of them verifies passkeys — a major there is worth reading on
+      # its own rather than alongside anything else.
+      api-major:
+        patterns: ['*']
+        update-types: ['major']
+
+  # Base images — api/Dockerfile (node:22-alpine)
+  - package-ecosystem: docker
+    directory: /api
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    ignore:
+      # Odd-numbered Node majors are "Current", never LTS — they stop getting fixes in about
+      # six months. Dependabot's first run offered 22 → 25, which for something other people
+      # self-host is a stability downgrade for nothing. Even majors (22 → 24 → 26) still get
+      # proposed, which is the move actually worth reviewing.
+      - dependency-name: node
+        versions: ['25.x', '27.x', '29.x', '31.x', '33.x']
+
+  # Base images — web/Dockerfile (node:22-alpine build stage + nginx:alpine)
+  - package-ecosystem: docker
+    directory: /web
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    ignore:
+      - dependency-name: node
+        versions: ['25.x', '27.x', '29.x', '31.x', '33.x']
+
+  # Workflow actions — everything under .github/workflows/
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      # These are all first-party actions/* and docker/* pinned to a major tag; they update
+      # in lockstep and none of them is worth a PR of its own.
+      actions:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+      # Action majors are usually a runner or Node-version change and usually harmless — but
+      # these workflows publish the ghcr images and deploy the live demo, so the blast radius
+      # is real. Separate PR, so a failure has an obvious cause.
+      actions-major:
+        patterns: ['*']
+        update-types: ['major']
