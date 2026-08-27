@@ -10,13 +10,25 @@ let pool = null
 let usingPg = false
 
 export async function kvInit() {
-  if (process.env.DATABASE_URL) {
-    pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
-    await pool.query('CREATE TABLE IF NOT EXISTS kv (k text PRIMARY KEY, v jsonb)')
-    usingPg = true
-  } else {
-    fs.mkdirSync(DATA, { recursive: true })
+  const url = process.env.DATABASE_URL
+  if (url) {
+    try {
+      pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false } })
+      await pool.query('CREATE TABLE IF NOT EXISTS kv (k text PRIMARY KEY, v jsonb)')
+      usingPg = true
+      // Log the target (host:port only — never the credentials) so a bad URL is easy to spot.
+      let target = url
+      try { const u = new URL(url); target = `${u.hostname}:${u.port || 5432}` } catch {}
+      console.log(`store=postgres (${target})`)
+      return
+    } catch (e) {
+      console.error(`Postgres connection failed (${e.code || e.message}); falling back to file storage. Check DATABASE_URL.`)
+      pool = null
+      usingPg = false
+    }
   }
+  fs.mkdirSync(DATA, { recursive: true })
+  console.log(`store=file (${DATA})`)
 }
 
 async function fileGet(k) {
