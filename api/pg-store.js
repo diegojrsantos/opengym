@@ -59,7 +59,10 @@ export async function kvGet(k) {
 }
 export async function kvSet(k, v) {
   if (usingPg) {
-    await pool.query('INSERT INTO kv(k,v) VALUES($1,$2) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v', [k, v])
+    // node-postgres does not reliably serialize a JS object to jsonb on its own — pass explicit
+    // JSON text so the column parser always receives valid JSON (otherwise it gets "[object Object]").
+    const val = v === undefined ? null : v
+    await pool.query('INSERT INTO kv(k,v) VALUES($1,$2) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v', [k, JSON.stringify(val)])
     return
   }
   return fileSet(k, v)
