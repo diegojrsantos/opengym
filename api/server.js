@@ -11,6 +11,7 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse
 } from '@simplewebauthn/server';
 import webpush from 'web-push';
+import { kvInit, kvGet, kvSet, kvDel, usingPg } from './pg-store.js';
 import { dayReminderPush, restTimerPush, testPush } from './push-messages.js';
 import { verifyError } from './verify-error.js';
 
@@ -41,37 +42,19 @@ const MAX_BODY = 5 * 1024 * 1024;
 // Secure cookies require HTTPS; over plain http://localhost the flag would drop the cookie
 const SECURE = /^https:/i.test(ORIGIN) ? ' Secure;' : '';
 
-fs.mkdirSync(DATA, { recursive: true });
-
-/* ---------- secret + db ---------- */
-const secretFile = path.join(DATA, 'secret');
-if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
-const SECRET = fs.readFileSync(secretFile, 'utf8').trim();
-
-const dbFile = path.join(DATA, 'db.json');
+/* ---------- secret + db + per-user state (loaded in initStore from Postgres or files) ---------- */
+let SECRET = null;
 let db = { users: [], creds: [], subs: [], invites: [] };
-try { db = JSON.parse(fs.readFileSync(dbFile, 'utf8')); } catch {}
-db.subs = db.subs || [];
-db.invites = db.invites || [];
+const statesCache = new Map();   // uid -> latest state (in-memory; also persisted via kvSet)
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
-function saveDb() { atomicWrite(dbFile, JSON.stringify(db, null, 2)); }
-function atomicWrite(file, content) {
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, content);
-  fs.renameSync(tmp, file);
-}
-const stateFile = uid => path.join(DATA, 'state-' + uid.replace(/[^a-zA-Z0-9_-]/g, '') + '.json');
-function readState(uid) {
-  try { return JSON.parse(fs.readFileSync(stateFile(uid), 'utf8')); } catch { return null; }
-}
+async function saveDb() { await kvSet('db', db); }
+const stateKey = uid => 'state-' + String(uid).replace(/[^a-zA-Z0-9_-]/g, '');
+async function saveState(uid, state) { statesCache.set(uid, state); await kvSet(stateKey(uid), state); }
+function readState(uid) { return statesCache.get(uid) || null; }
 
 /* ---------- push notifications (Web Push / VAPID) ---------- */
-const vapidFile = path.join(DATA, 'vapid.json');
-let vapid;
-try { vapid = JSON.parse(fs.readFileSync(vapidFile, 'utf8')); }
-catch { vapid = webpush.generateVAPIDKeys(); fs.writeFileSync(vapidFile, JSON.stringify(vapid), { mode: 0o600 }); }
+let vapid = null;   // loaded in initStore
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || (SECURE ? ORIGIN : 'mailto:admin@localhost');
-webpush.setVapidDetails(VAPID_SUBJECT, vapid.publicKey, vapid.privateKey);
 
 /* A push subscription's `endpoint` is a URL this server connects out to, chosen by whoever is
    signed in — so without a check /api/push/* is a request-forgery lever, and the api container
@@ -448,7 +431,6 @@ const AUDIT_MAX = Math.max(0, +(process.env.AUDIT_MAX || 5000) || 0);     // 0 =
 const AUDIT_DAYS = Math.max(0, +(process.env.AUDIT_DAYS || 90) || 0);     // 0 = no age cap
 const AUDIT_IP = /^full$/i.test(process.env.AUDIT_IP || '') ? 'full'
   : /^(1|true|yes|on|net)$/i.test(process.env.AUDIT_IP || '') ? 'net' : 'off';
-const auditFile = path.join(DATA, 'audit.log');
 let auditSeq = 0;      // never reset, not even by a clear — a wiped log leaves a visible id gap
 let auditCount = 0;
 
@@ -475,9 +457,8 @@ function clientIp(req) {
   return g ? g + '::/48' : null;
 }
 
-function auditLines() {
-  let text;
-  try { text = fs.readFileSync(auditFile, 'utf8'); } catch { return []; }
+async function auditLines() {
+  const text = (await kvGet('audit')) || '';
   const rows = [];
   for (const line of text.split('\n')) {
     if (!line) continue;
@@ -492,18 +473,18 @@ function auditKeep(rows) {
   if (AUDIT_MAX && out.length > AUDIT_MAX) out = out.slice(out.length - AUDIT_MAX);
   return out;
 }
-function compactAudit() {
-  const rows = auditLines();
+async function compactAudit() {
+  const rows = await auditLines();
   for (const r of rows) if (+r.id > auditSeq) auditSeq = +r.id;
   const keep = auditKeep(rows);
   auditCount = keep.length;
   if (keep.length === rows.length) return;
-  try { atomicWrite(auditFile, keep.map(r => JSON.stringify(r)).join('\n') + (keep.length ? '\n' : '')); }
+  try { await kvSet('audit', keep.map(r => JSON.stringify(r)).join('\n') + (keep.length ? '\n' : '')); }
   catch (e) { console.error('audit compact failed', e.message); }
 }
 
 // Never throws: a log that can't be written must not break signing in.
-function audit(req, ev, f = {}) {
+async function audit(req, ev, f = {}) {
   if (!AUDIT_ON) return;
   const rec = { id: ++auditSeq, ts: Date.now(), ev, ok: f.ok !== false };
   if (f.user) { rec.uid = f.user.id; rec.name = String(f.user.name || '').slice(0, 40); }
@@ -515,14 +496,10 @@ function audit(req, ev, f = {}) {
   if (f.msg) rec.msg = String(f.msg).slice(0, 120);
   const ip = clientIp(req);
   if (ip) rec.ip = ip;
-  try { fs.appendFileSync(auditFile, JSON.stringify(rec) + '\n'); }
+  try { await kvSet('audit', (await kvGet('audit') || '') + JSON.stringify(rec) + '\n'); }
   catch (e) { return console.error('audit write failed', e.message); }
   // Amortized: a 5000-event cap rewrites the file once per ~1250 events.
   if (AUDIT_MAX && ++auditCount > AUDIT_MAX * 1.25) compactAudit();
-}
-if (AUDIT_ON) {
-  compactAudit();                                // prune on boot, seed auditSeq/auditCount
-  setInterval(compactAudit, 3600000).unref();    // honour AUDIT_DAYS on an idle instance too
 }
 
 /* ---------- routes ---------- */
@@ -729,10 +706,8 @@ const routes = {
   'GET /api/data': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
-    try {
-      const state = JSON.parse(fs.readFileSync(stateFile(user.id), 'utf8'));
-      json(res, 200, { state });
-    } catch { json(res, 200, { state: null }); }
+    const state = statesCache.get(user.id) ?? await kvGet(stateKey(user.id));
+    json(res, 200, { state: state || null });
   },
 
   'PUT /api/data': async (req, res) => {
@@ -741,7 +716,7 @@ const routes = {
     const body = await readBody(req);
     if (!body.state || typeof body.state !== 'object') return json(res, 400, { error: 'state required' });
     delete body.state.active;              // in-progress workouts stay device-local
-    atomicWrite(stateFile(user.id), JSON.stringify(body.state));
+    await saveState(user.id, body.state);
     json(res, 200, { ok: true, ts: body.state._ts || null });
   },
 
@@ -940,7 +915,7 @@ const routes = {
   // ./data/audit.log already is the export, in a format jq reads directly.
   'POST /api/admin/audit/clear': async (req, res) => {
     const admin = requireAdmin(req, res); if (!admin) return;
-    try { fs.unlinkSync(auditFile); } catch { /* nothing logged yet */ }
+    await kvDel('audit');
     auditCount = 0;
     audit(req, 'admin.audit.clear', { user: admin });
     json(res, 200, { ok: true });
@@ -999,7 +974,7 @@ async function tryStatic(res, pathname, method) {
   return true
 }
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   // Same-origin (the deployed nginx-proxied web app) never triggers CORS, so this only matters
   // for the paired mobile app calling in from its own WebView origin. It carries no cookie
   // (auth is the Authorization header instead), so Allow-Credentials is deliberately never set —
@@ -1035,4 +1010,31 @@ http.createServer(async (req, res) => {
     console.error(key, e);
     if (!res.headersSent) json(res, 500, { error: 'server error' });
   }
-}).listen(PORT, () => console.log(`gym-api on :${PORT} (rpID=${RP_ID}, origin=${ORIGIN})`));
+});
+
+// Load secret/db/vapid/audit from Postgres (or files) and only then start accepting traffic.
+async function initStore() {
+  await kvInit();
+  SECRET = await kvGet('secret');
+  if (!SECRET) { SECRET = crypto.randomBytes(32).toString('hex'); await kvSet('secret', SECRET); }
+
+  const loaded = await kvGet('db');
+  if (loaded && typeof loaded === 'object') {
+    db = Object.assign({ users: [], creds: [], subs: [], invites: [] }, loaded);
+  }
+  db.subs = db.subs || [];
+  db.invites = db.invites || [];
+
+  vapid = await kvGet('vapid');
+  if (!vapid) { vapid = webpush.generateVAPIDKeys(); await kvSet('vapid', vapid); }
+  webpush.setVapidDetails(VAPID_SUBJECT, vapid.publicKey, vapid.privateKey);
+
+  if (AUDIT_ON) {
+    compactAudit();                                // prune on boot, seed auditSeq/auditCount
+    setInterval(compactAudit, 3600000).unref();    // honour AUDIT_DAYS on an idle instance too
+  }
+
+  server.listen(PORT, () => console.log(`gym-api on :${PORT} (rpID=${RP_ID}, origin=${ORIGIN}, store=${usingPg ? 'postgres' : 'file'})`));
+}
+
+initStore().catch(e => { console.error('init failed', e); process.exit(1); });
