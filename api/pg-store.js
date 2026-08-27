@@ -11,24 +11,36 @@ let usingPg = false
 
 export async function kvInit() {
   const url = process.env.DATABASE_URL
-  if (url) {
+  // No DATABASE_URL => explicit local-dev mode: files under DATA_DIR. This is intentional, not a
+  // fallback for a broken DB — if a DB URL is configured we REQUIRE it to be reachable.
+  if (!url) {
+    fs.mkdirSync(DATA, { recursive: true })
+    console.log(`store=file (${DATA})`)
+    return
+  }
+  // DATABASE_URL is set: Postgres is the backend. Retry a few times to survive DB cold starts,
+  // then fail loudly instead of silently degrading to file storage (which would lose data).
+  let lastErr
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false } })
       await pool.query('CREATE TABLE IF NOT EXISTS kv (k text PRIMARY KEY, v jsonb)')
       usingPg = true
-      // Log the target (host:port only — never the credentials) so a bad URL is easy to spot.
       let target = url
       try { const u = new URL(url); target = `${u.hostname}:${u.port || 5432}` } catch {}
-      console.log(`store=postgres (${target})`)
+      console.log(`store=postgres (${target}) [attempt ${attempt}]`)
       return
     } catch (e) {
-      console.error(`Postgres connection failed (${e.code || e.message}); falling back to file storage. Check DATABASE_URL.`)
+      lastErr = e
+      try { await pool?.end() } catch {}
       pool = null
-      usingPg = false
+      if (attempt < 5) {
+        console.error(`Postgres connect failed (${e.code || e.message}); retry ${attempt}/5...`)
+        await new Promise(r => setTimeout(r, 2000))
+      }
     }
   }
-  fs.mkdirSync(DATA, { recursive: true })
-  console.log(`store=file (${DATA})`)
+  throw new Error(`Postgres unreachable after 5 attempts: ${lastErr?.code || lastErr?.message}`)
 }
 
 async function fileGet(k) {
