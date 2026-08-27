@@ -130,8 +130,15 @@ export function matchesExerciseSearch(exercise, query) {
 // shipping ~140 MB of images into the deployment. `import.meta.env` is undefined in plain
 // Node; the guard keeps this module loadable without Vite.
 const ENV = import.meta.env || {}
-const IMG_BASE = ENV.VITE_IMG_BASE || 'img/'
-const GIF_BASE = ENV.VITE_GIF_BASE || 'gif/'
+// When deployed (e.g. Hostless/Render) the ~140 MB media dataset isn't shipped with the
+// build, so pull images/animations straight from the upstream dataset CDN. Locally the
+// `img/`+`gif/` folders (or an explicit VITE_IMG_BASE / VITE_GIF_BASE) still take precedence.
+const CDN_IMG = 'https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset/images/'
+const CDN_GIF = 'https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset/videos/'
+const _host = (typeof location !== 'undefined' && location.hostname) || ''
+const _deployed = _host.endsWith('hostless.app') || _host.endsWith('onrender.com')
+const IMG_BASE = ENV.VITE_IMG_BASE || (_deployed ? CDN_IMG : 'img/')
+const GIF_BASE = ENV.VITE_GIF_BASE || (_deployed ? CDN_GIF : 'gif/')
 export const imgSrc = ex => IMG_BASE + ex.img
 export const gifSrc = ex => GIF_BASE + ex.gif
 
