@@ -15,24 +15,24 @@
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@capacitor/app": "^7.1.2",
-    "@capacitor/core": "^7.6.8",
-    "@capacitor/filesystem": "^7.1.8",
+    "@capacitor/core": "^7.6.10",
+    "@capacitor/filesystem": "^7.1.9",
     "@capacitor/local-notifications": "^7.0.7",
     "@capacitor/share": "^7.0.4",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-router-dom": "^7.18.2",
-    "zustand": "^5.0.14"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5",
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
-    "@capacitor/android": "^7.6.8",
+    "@capacitor/android": "^7.6.10",
     "@capacitor/assets": "^3.0.5",
-    "@capacitor/cli": "^7.6.8",
-    "@capacitor/ios": "^7.6.8",
-    "@vitejs/plugin-react": "^6.0.3",
+    "@capacitor/cli": "^7.6.10",
+    "@capacitor/ios": "^7.6.10",
+    "@vitejs/plugin-react": "^6.1.2",
     "happy-dom": "^20.11.2",
-    "linkedom": "^0.18.13",
-    "vite": "^8.1.5",
+    "linkedom": "^0.18.14",
+    "vite": "^8.3.5",
     "vitest": "^4.1.10"
   }
 }
